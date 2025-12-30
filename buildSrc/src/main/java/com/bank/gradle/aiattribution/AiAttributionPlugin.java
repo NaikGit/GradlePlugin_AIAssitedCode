@@ -71,6 +71,7 @@ public class AiAttributionPlugin implements Plugin<Project> {
                 // Don't add as dependency by default - run separately
                 // Uncomment below to make it part of the check lifecycle:
                 // checkTask.dependsOn(TASK_NAME);
+
             });
         });
         
