@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+    id 'com.bank.ai-attribution'
+}
+
+group = 'com.bank.payments'
+version = '1.0.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Configure the AI Attribution plugin
+aiAttribution {
+    // Analyze last 100 commits (default)
+    maxCommits = 100
+    
+    // Optional: Analyze since a specific tag or commit
+    // sinceCommit = 'v1.0.0'
+    
+    // Generate all report formats
+    outputFormats = ['json', 'html', 'xml']
+    
+    // Output location (default is build/reports/ai-attribution)
+    outputDirectory = file("$buildDir/reports/ai-attribution")
+    
+    // Optional: Fail build if AI attribution is below threshold
+    // failOnNoAttribution = true
+    // minAttributionPercentage = 10.0
+    
+    // Include file-level details in reports
+    includeFileDetails = true
+}

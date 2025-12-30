@@ -1,0 +1,179 @@
+#!/bin/bash
+#
+# AI Attribution - prepare-commit-msg hook
+# 
+# This hook prompts developers to declare AI assistance when committing.
+# Install: Copy to .git/hooks/prepare-commit-msg and make executable
+#
+# For team-wide enforcement, distribute via:
+#   - Git template directory
+#   - Husky (npm)
+#   - Pre-commit framework
+#
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2  # message, template, merge, squash, or commit
+SHA1=$3           # Only set for -c/-C/--amend
+
+# Colors for terminal output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# Configuration (can be overridden via environment variables)
+AI_ATTRIBUTION_ENABLED="${AI_ATTRIBUTION_ENABLED:-true}"
+AI_ATTRIBUTION_REQUIRED="${AI_ATTRIBUTION_REQUIRED:-false}"
+AI_ATTRIBUTION_SKIP_MERGE="${AI_ATTRIBUTION_SKIP_MERGE:-true}"
+AI_ATTRIBUTION_DEFAULT_TOOL="${AI_ATTRIBUTION_DEFAULT_TOOL:-}"
+
+# Skip if disabled
+if [ "$AI_ATTRIBUTION_ENABLED" != "true" ]; then
+    exit 0
+fi
+
+# Skip for merge commits, squash, amend (unless configured otherwise)
+if [ "$AI_ATTRIBUTION_SKIP_MERGE" = "true" ]; then
+    case "$COMMIT_SOURCE" in
+        merge|squash)
+            exit 0
+            ;;
+    esac
+fi
+
+# Skip if running in non-interactive mode (CI/CD)
+if [ ! -t 0 ]; then
+    # Non-interactive - check if trailers already exist
+    if grep -qE "^AI-(Tool|Assisted):" "$COMMIT_MSG_FILE" 2>/dev/null; then
+        exit 0  # Trailers present, allow commit
+    elif [ "$AI_ATTRIBUTION_REQUIRED" = "true" ]; then
+        echo -e "${RED}ERROR: AI attribution trailers required but not found.${NC}"
+        echo "Add AI-Tool: <tool> and AI-Assisted: <true|false> to your commit message."
+        exit 1
+    fi
+    exit 0
+fi
+
+# Check if trailers already exist in the message
+if grep -qE "^AI-(Tool|Assisted):" "$COMMIT_MSG_FILE" 2>/dev/null; then
+    exit 0  # Already has attribution, don't prompt
+fi
+
+# Interactive prompt
+exec < /dev/tty
+
+clear_line() {
+    echo -ne "\033[2K\r"
+}
+
+print_header() {
+    echo ""
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}           ${BOLD}AI Attribution Tracking${NC}                          ${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_header
+
+# Ask if AI-assisted
+echo -e "${YELLOW}Was this commit created with AI assistance?${NC}"
+echo -e "  ${GREEN}y${NC} = Yes, AI helped write this code"
+echo -e "  ${RED}n${NC} = No, this was written without AI"
+echo -e "  ${BLUE}s${NC} = Skip (don't add attribution)"
+echo ""
+
+while true; do
+    read -p "Your choice [y/n/s]: " ai_choice
+    case $ai_choice in
+        [Yy]* )
+            ai_assisted="true"
+            break
+            ;;
+        [Nn]* )
+            ai_assisted="false"
+            ai_tool="none"
+            break
+            ;;
+        [Ss]* )
+            echo -e "${YELLOW}Skipping AI attribution for this commit.${NC}"
+            exit 0
+            ;;
+        * )
+            echo -e "${RED}Please answer y, n, or s.${NC}"
+            ;;
+    esac
+done
+
+# If AI-assisted, ask which tool
+if [ "$ai_assisted" = "true" ]; then
+    echo ""
+    echo -e "${YELLOW}Which AI tool did you use?${NC}"
+    echo -e "  ${GREEN}1${NC}) GitHub Copilot"
+    echo -e "  ${GREEN}2${NC}) Devin"
+    echo -e "  ${GREEN}3${NC}) Claude"
+    echo -e "  ${GREEN}4${NC}) ChatGPT"
+    echo -e "  ${GREEN}5${NC}) AWS CodeWhisperer"
+    echo -e "  ${GREEN}6${NC}) Other"
+    echo ""
+    
+    while true; do
+        read -p "Select tool [1-6]: " tool_choice
+        case $tool_choice in
+            1) ai_tool="github-copilot"; break ;;
+            2) ai_tool="devin"; break ;;
+            3) ai_tool="claude"; break ;;
+            4) ai_tool="chatgpt"; break ;;
+            5) ai_tool="codewhisperer"; break ;;
+            6) 
+                read -p "Enter tool name: " custom_tool
+                ai_tool="${custom_tool:-other}"
+                break 
+                ;;
+            *)
+                echo -e "${RED}Please select 1-6.${NC}"
+                ;;
+        esac
+    done
+    
+    # Optional: Ask for confidence level
+    echo ""
+    echo -e "${YELLOW}How much of this code was AI-generated?${NC}"
+    echo -e "  ${GREEN}1${NC}) High   - Mostly AI-generated, minor edits"
+    echo -e "  ${GREEN}2${NC}) Medium - Mix of AI and manual coding"
+    echo -e "  ${GREEN}3${NC}) Low    - AI helped with small parts"
+    echo -e "  ${GREEN}4${NC}) Skip   - Don't specify"
+    echo ""
+    
+    read -p "Confidence [1-4]: " confidence_choice
+    case $confidence_choice in
+        1) ai_confidence="high" ;;
+        2) ai_confidence="medium" ;;
+        3) ai_confidence="low" ;;
+        *) ai_confidence="" ;;
+    esac
+fi
+
+# Append trailers to commit message
+echo "" >> "$COMMIT_MSG_FILE"
+
+if [ "$ai_assisted" = "true" ]; then
+    echo "AI-Tool: $ai_tool" >> "$COMMIT_MSG_FILE"
+    echo "AI-Assisted: true" >> "$COMMIT_MSG_FILE"
+    if [ -n "$ai_confidence" ]; then
+        echo "AI-Confidence: $ai_confidence" >> "$COMMIT_MSG_FILE"
+    fi
+    echo ""
+    echo -e "${GREEN}✓ Added AI attribution:${NC} $ai_tool (assisted=true${ai_confidence:+, confidence=$ai_confidence})"
+else
+    echo "AI-Tool: none" >> "$COMMIT_MSG_FILE"
+    echo "AI-Assisted: false" >> "$COMMIT_MSG_FILE"
+    echo ""
+    echo -e "${GREEN}✓ Added AI attribution:${NC} none (assisted=false)"
+fi
+
+echo ""
+exit 0

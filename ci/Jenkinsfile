@@ -1,0 +1,201 @@
+/**
+ * Jenkins Pipeline for AI Attribution PR Comments
+ * 
+ * This pipeline generates AI attribution reports and posts them as PR comments.
+ * Designed for your proprietary Jenkins platform.
+ * 
+ * Prerequisites:
+ * - GitHub/Bitbucket credentials configured in Jenkins
+ * - Pipeline configured as multibranch (for PR detection)
+ * 
+ * Usage:
+ * - Add this as a stage in your existing Jenkinsfile, OR
+ * - Use it as a shared library
+ */
+
+// Standalone Jenkinsfile
+pipeline {
+    agent any
+    
+    environment {
+        // Configure these for your environment
+        GRADLE_OPTS = '-Dorg.gradle.daemon=false'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh './gradlew build'
+            }
+        }
+        
+        stage('AI Attribution Analysis') {
+            steps {
+                sh './gradlew aiAttributionReport -PoutputFormats=json,pr-comment'
+            }
+        }
+        
+        stage('Post PR Comment') {
+            when {
+                // Only post comments on PRs
+                expression { env.CHANGE_ID != null }
+            }
+            steps {
+                script {
+                    postAiAttributionComment()
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Archive reports
+            archiveArtifacts artifacts: 'build/reports/ai-attribution/**', allowEmptyArchive: true
+            
+            // Publish HTML report
+            publishHTML([
+                reportDir: 'build/reports/ai-attribution',
+                reportFiles: 'ai-attribution-report.html',
+                reportName: 'AI Attribution Report',
+                keepAll: true,
+                alwaysLinkToLastBuild: true
+            ])
+        }
+    }
+}
+
+/**
+ * Posts the AI attribution comment to the PR.
+ * Supports GitHub and Bitbucket.
+ */
+def postAiAttributionComment() {
+    def commentFile = 'build/reports/ai-attribution/ai-attribution-report.md'
+    
+    if (!fileExists(commentFile)) {
+        echo "No PR comment file found at ${commentFile}"
+        return
+    }
+    
+    def comment = readFile(commentFile)
+    
+    // Detect SCM type and post accordingly
+    if (env.GIT_URL?.contains('github.com')) {
+        postGitHubComment(comment)
+    } else if (env.GIT_URL?.contains('bitbucket')) {
+        postBitbucketComment(comment)
+    } else {
+        echo "Unknown SCM type. Comment saved to: ${commentFile}"
+    }
+}
+
+/**
+ * Posts comment to GitHub PR using gh CLI or API.
+ */
+def postGitHubComment(String comment) {
+    // Option 1: Using GitHub CLI (if installed)
+    try {
+        writeFile file: 'pr-comment.md', text: comment
+        sh """
+            gh pr comment ${env.CHANGE_ID} --body-file pr-comment.md || true
+        """
+        echo "Posted AI Attribution comment to GitHub PR #${env.CHANGE_ID}"
+    } catch (Exception e) {
+        // Option 2: Using GitHub API
+        echo "GitHub CLI not available, trying API..."
+        postGitHubCommentViaApi(comment)
+    }
+}
+
+/**
+ * Posts comment via GitHub REST API.
+ */
+def postGitHubCommentViaApi(String comment) {
+    // Extract owner/repo from GIT_URL
+    def matcher = env.GIT_URL =~ /github\.com[\/:]([^\/]+)\/([^\/\.]+)/
+    if (!matcher.find()) {
+        error "Could not parse GitHub owner/repo from ${env.GIT_URL}"
+    }
+    def owner = matcher[0][1]
+    def repo = matcher[0][2]
+    
+    withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+        def payload = groovy.json.JsonOutput.toJson([body: comment])
+        
+        sh """
+            curl -X POST \
+                -H "Authorization: token ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -d '${payload}' \
+                "https://api.github.com/repos/${owner}/${repo}/issues/${env.CHANGE_ID}/comments"
+        """
+    }
+    echo "Posted AI Attribution comment via GitHub API"
+}
+
+/**
+ * Posts comment to Bitbucket PR.
+ */
+def postBitbucketComment(String comment) {
+    // Extract workspace/repo from GIT_URL
+    def matcher = env.GIT_URL =~ /bitbucket\.org[\/:]([^\/]+)\/([^\/\.]+)/
+    if (!matcher.find()) {
+        error "Could not parse Bitbucket workspace/repo from ${env.GIT_URL}"
+    }
+    def workspace = matcher[0][1]
+    def repo = matcher[0][2]
+    
+    withCredentials([usernamePassword(credentialsId: 'bitbucket-creds', 
+                                       usernameVariable: 'BB_USER', 
+                                       passwordVariable: 'BB_PASS')]) {
+        def payload = groovy.json.JsonOutput.toJson([
+            content: [raw: comment]
+        ])
+        
+        sh """
+            curl -X POST \
+                -u "${BB_USER}:${BB_PASS}" \
+                -H "Content-Type: application/json" \
+                -d '${payload}' \
+                "https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests/${env.CHANGE_ID}/comments"
+        """
+    }
+    echo "Posted AI Attribution comment to Bitbucket PR"
+}
+
+// ============================================================================
+// ALTERNATIVE: Use as a shared library function
+// ============================================================================
+// 
+// In your shared library (vars/aiAttribution.groovy):
+// 
+// def call(Map config = [:]) {
+//     def formats = config.formats ?: 'json,html,pr-comment'
+//     
+//     sh "./gradlew aiAttributionReport -PoutputFormats=${formats}"
+//     
+//     if (env.CHANGE_ID) {
+//         postAiAttributionComment()
+//     }
+//     
+//     archiveArtifacts artifacts: 'build/reports/ai-attribution/**', allowEmptyArchive: true
+// }
+//
+// Then in your Jenkinsfile:
+//
+// @Library('your-shared-library') _
+// pipeline {
+//     stages {
+//         stage('AI Attribution') {
+//             steps {
+//                 aiAttribution()
+//             }
+//         }
+//     }
+// }

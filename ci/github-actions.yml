@@ -1,0 +1,151 @@
+# GitHub Actions Workflow for AI Attribution PR Comments
+#
+# This workflow analyzes AI attribution in commits and posts a summary comment on PRs.
+#
+# Setup:
+# 1. Copy this file to .github/workflows/ai-attribution.yml
+# 2. Ensure the repository has the AI Attribution plugin in buildSrc/
+# 3. Configure permissions (see below)
+
+name: AI Attribution Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master, develop]
+
+# Required permissions for posting PR comments
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-attribution:
+    name: Analyze AI Attribution
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history for accurate Git analysis
+          fetch-depth: 0
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+      
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+      
+      - name: Generate AI Attribution Report
+        run: |
+          ./gradlew aiAttributionReport \
+            -PoutputFormats=json,html,pr-comment \
+            --no-daemon
+      
+      - name: Upload Reports as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-attribution-reports
+          path: build/reports/ai-attribution/
+          retention-days: 30
+      
+      - name: Post PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const commentPath = 'build/reports/ai-attribution/ai-attribution-report.md';
+            
+            if (!fs.existsSync(commentPath)) {
+              console.log('No PR comment file found');
+              return;
+            }
+            
+            const comment = fs.readFileSync(commentPath, 'utf8');
+            
+            // Find existing AI Attribution comment to update
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            
+            const existingComment = comments.find(c => 
+              c.body.includes('AI Attribution Summary') && 
+              c.user.type === 'Bot'
+            );
+            
+            if (existingComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: comment
+              });
+              console.log('Updated existing AI Attribution comment');
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+              console.log('Created new AI Attribution comment');
+            }
+      
+      - name: Parse Report for Summary
+        id: parse-report
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -f build/reports/ai-attribution/ai-attribution-report.json ]; then
+            AI_PCT=$(jq -r '.summary.aiAssistedPercentage' build/reports/ai-attribution/ai-attribution-report.json)
+            AI_COMMITS=$(jq -r '.summary.aiAssistedCommits' build/reports/ai-attribution/ai-attribution-report.json)
+            TOTAL=$(jq -r '.summary.totalCommits' build/reports/ai-attribution/ai-attribution-report.json)
+            
+            echo "ai_percentage=${AI_PCT}" >> $GITHUB_OUTPUT
+            echo "ai_commits=${AI_COMMITS}" >> $GITHUB_OUTPUT
+            echo "total_commits=${TOTAL}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Add Check Summary
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "## 🤖 AI Attribution Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| AI-Assisted Commits | ${{ steps.parse-report.outputs.ai_commits }} / ${{ steps.parse-report.outputs.total_commits }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AI Percentage | ${{ steps.parse-report.outputs.ai_percentage }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See the [full report](../actions/runs/${{ github.run_id }}) for details." >> $GITHUB_STEP_SUMMARY
+
+# ============================================================================
+# OPTIONAL: Enforce minimum attribution percentage
+# ============================================================================
+#
+# Uncomment and configure this job to fail PRs below a threshold:
+#
+#   enforce-attribution:
+#     name: Enforce Attribution
+#     runs-on: ubuntu-latest
+#     needs: ai-attribution
+#     if: github.event_name == 'pull_request'
+#     steps:
+#       - name: Check Attribution Threshold
+#         run: |
+#           MIN_PERCENTAGE=10
+#           ACTUAL=${{ needs.ai-attribution.outputs.ai_percentage }}
+#           
+#           if (( $(echo "$ACTUAL < $MIN_PERCENTAGE" | bc -l) )); then
+#             echo "AI attribution percentage ($ACTUAL%) is below minimum ($MIN_PERCENTAGE%)"
+#             exit 1
+#           fi

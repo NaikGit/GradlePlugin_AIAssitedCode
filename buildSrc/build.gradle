@@ -1,0 +1,24 @@
+plugins {
+    id 'java-gradle-plugin'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // For Git operations
+    implementation 'org.eclipse.jgit:org.eclipse.jgit:6.8.0.202311291450-r'
+    
+    // For JSON output
+    implementation 'com.google.code.gson:gson:2.10.1'
+}
+
+gradlePlugin {
+    plugins {
+        aiAttributionPlugin {
+            id = 'com.bank.ai-attribution'
+            implementationClass = 'com.bank.gradle.aiattribution.AiAttributionPlugin'
+        }
+    }
+}

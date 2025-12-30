@@ -1,0 +1,77 @@
+#!/bin/bash
+#
+# AI Attribution - commit-msg hook (validation)
+#
+# This hook validates that AI attribution trailers are present.
+# Use this for enforcement when prepare-commit-msg isn't enough.
+#
+# Install: Copy to .git/hooks/commit-msg and make executable
+#
+
+COMMIT_MSG_FILE=$1
+
+# Configuration
+AI_ATTRIBUTION_REQUIRED="${AI_ATTRIBUTION_REQUIRED:-false}"
+AI_ATTRIBUTION_WARN_MISSING="${AI_ATTRIBUTION_WARN_MISSING:-true}"
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+# Check for AI attribution trailers
+has_ai_tool=$(grep -c "^AI-Tool:" "$COMMIT_MSG_FILE" 2>/dev/null || echo "0")
+has_ai_assisted=$(grep -c "^AI-Assisted:" "$COMMIT_MSG_FILE" 2>/dev/null || echo "0")
+
+# Validation
+if [ "$has_ai_tool" -eq 0 ] && [ "$has_ai_assisted" -eq 0 ]; then
+    if [ "$AI_ATTRIBUTION_REQUIRED" = "true" ]; then
+        echo ""
+        echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║  ERROR: AI Attribution Required                            ║${NC}"
+        echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "Your organization requires AI attribution on all commits."
+        echo -e "Please add the following trailers to your commit message:"
+        echo ""
+        echo -e "  ${GREEN}AI-Tool: github-copilot${NC}  (or: devin, claude, chatgpt, none)"
+        echo -e "  ${GREEN}AI-Assisted: true${NC}        (or: false)"
+        echo ""
+        echo -e "Example commit message:"
+        echo -e "  Fix payment validation bug"
+        echo -e ""
+        echo -e "  AI-Tool: github-copilot"
+        echo -e "  AI-Assisted: true"
+        echo ""
+        echo -e "To skip (not recommended): git commit --no-verify"
+        echo ""
+        exit 1
+    elif [ "$AI_ATTRIBUTION_WARN_MISSING" = "true" ]; then
+        echo ""
+        echo -e "${YELLOW}⚠ Warning: No AI attribution trailers found.${NC}"
+        echo -e "Consider adding AI-Tool and AI-Assisted trailers for tracking."
+        echo ""
+    fi
+fi
+
+# Validate trailer format if present
+if [ "$has_ai_tool" -gt 0 ]; then
+    tool_value=$(grep "^AI-Tool:" "$COMMIT_MSG_FILE" | head -1 | cut -d: -f2 | tr -d ' ')
+    
+    valid_tools="github-copilot|devin|claude|chatgpt|codewhisperer|other|none"
+    if ! echo "$tool_value" | grep -qiE "^($valid_tools)$"; then
+        echo -e "${YELLOW}⚠ Warning: Unrecognized AI-Tool value: '$tool_value'${NC}"
+        echo -e "  Recognized values: github-copilot, devin, claude, chatgpt, codewhisperer, other, none"
+    fi
+fi
+
+if [ "$has_ai_assisted" -gt 0 ]; then
+    assisted_value=$(grep "^AI-Assisted:" "$COMMIT_MSG_FILE" | head -1 | cut -d: -f2 | tr -d ' ')
+    
+    if ! echo "$assisted_value" | grep -qiE "^(true|false|yes|no)$"; then
+        echo -e "${YELLOW}⚠ Warning: AI-Assisted should be 'true' or 'false', got: '$assisted_value'${NC}"
+    fi
+fi
+
+exit 0
